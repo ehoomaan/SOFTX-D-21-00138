@@ -77,6 +77,16 @@ method_name = st.selectbox(
         "Becker et al. (energy)",
     ],
 )
+unit = st.selectbox("Display units", ["kPa", "tsf", "psf"])
+
+def kpa_to_display(x):
+    if unit == "kPa":
+        return x
+    if unit == "psf":
+        return x * 20.885434233  # 1 kPa = 20.885434233 psf
+    if unit == "tsf":
+        return x / 95.760518     # 1 tsf ≈ 95.760518 kPa
+    return x
 
 def run_analysis(df):
     data = Data(df.iloc[:, :3], sigmaV=sigmaV)
