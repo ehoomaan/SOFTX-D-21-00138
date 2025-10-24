@@ -2,6 +2,12 @@ import io
 import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
+import matplotlib as mpl
+
+# IMPORTANT: Disable LaTeX so it works on Streamlit Cloud (no TeX installed there)
+mpl.rcParams["text.usetex"] = False
+mpl.rcParams["mathtext.fontset"] = "dejavusans"
+mpl.rcParams["font.family"] = "DejaVu Sans"
 
 from pysigmap.data import Data
 from pysigmap.casagrande import Casagrande
