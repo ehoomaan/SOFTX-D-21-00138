@@ -1,14 +1,15 @@
-import io
+import io, re
 import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
 import matplotlib as mpl
-# --- put this near the top of app.py ---
-# IMPORTANT: Disable LaTeX so it works on Streamlit Cloud (no TeX installed there)
+
+# --- Matplotlib rendering defaults: no external LaTeX, use mathtext ---
 mpl.rcParams["text.usetex"] = False
 mpl.rcParams["mathtext.fontset"] = "dejavusans"
 mpl.rcParams["font.family"] = "DejaVu Sans"
 
+# --- pySigmaP imports ---
 from pysigmap.data import Data
 from pysigmap.casagrande import Casagrande
 from pysigmap.pachecosilva import PachecoSilva
@@ -17,19 +18,82 @@ from pysigmap.bilog import Bilog
 from pysigmap.energy import WangAndFrost, BeckerEtAl
 
 st.set_page_config(page_title="pySigmaP GUI", layout="centered")
-
 st.title("Preconsolidation Pressure (pySigmaP)")
-st.write("Upload your oedometer CSV, pick a method, and compute σ'ₚ. "
-         "CSV must have **three columns** in this strict order: "
-         "effective vertical stress σ'v (kPa), axial strain, void ratio. "
-         "The first row should include the on-table void ratio.")
+
+st.write("""
+Upload your oedometer CSV, pick a method, and compute sigma'p.
+CSV must have **three columns** in this strict order:
+1) stress (your units), 2) axial strain, 3) void ratio.
+The first row should include the on-table void ratio.
+""")
 
 with st.expander("Try a sample dataset (authors' demo CSV)"):
-    st.write("Use this URL in case you want to test without your own file:")
+    st.write("Use this URL if you want to test without your own file:")
     st.code("https://raw.githubusercontent.com/eamontoyaa/data4testing/main/pysigmap/testData.csv", language="text")
 
+# ----------------- Units -----------------
+UNITS = [
+    "kPa", "MPa", "kN/m^2", "Pa",
+    "psi", "psf", "ksf", "tsf",
+    "bar", "kgf/cm^2"
+]
+TO_KPA = {
+    "kPa": 1.0,
+    "MPa": 1000.0,
+    "kN/m^2": 1.0,          # 1 kN/m^2 = 1 kPa
+    "Pa": 0.001,
+    "bar": 100.0,
+    "psi": 6.894757293168361,
+    "psf": 0.04788025898033584,   # 1 psf = 47.88025898 Pa
+    "ksf": 47.88025898033584,     # 1000 psf
+    "tsf": 95.76051796067168,     # 2000 psf (short ton)
+    "kgf/cm^2": 98.0665,
+}
+
+def to_kpa(x, unit):
+    return float(x) * TO_KPA[unit]
+
+def series_to_kpa(s, unit):
+    return s.astype(float) * TO_KPA[unit]
+
+def from_kpa(x_kpa, unit):
+    return float(x_kpa) / TO_KPA[unit]
+
+# --- Legend TeX sanitizer (handles titles like \textbf{...}) ---
+def _strip_tex_macros(s: str) -> str:
+    s = re.sub(r'\\textbf\{([^}]*)\}', r'\1', s)
+    s = re.sub(r'\\mathbf\{([^}]*)\}', r'\1', s)
+    s = s.replace(r'\,', ' ').replace(r'\;', ' ').replace(r'\:', ' ')
+    return s
+
+def fix_legend_tex(fig):
+    for ax in fig.get_axes():
+        leg = ax.get_legend()
+        if not leg:
+            continue
+        title = leg.get_title()
+        if title is not None:
+            raw = title.get_text()
+            clean = _strip_tex_macros(raw)
+            if clean != raw:
+                title.set_text(clean)
+                title.set_fontweight('bold')
+        for t in leg.get_texts():
+            raw = t.get_text()
+            clean = _strip_tex_macros(raw)
+            if clean != raw:
+                t.set_text(clean)
+                t.set_fontweight('bold')
+
+# ----------------- UI controls -----------------
 uploaded = st.file_uploader("Upload CSV", type=["csv"])
-sigmaV = st.number_input("In-situ effective vertical stress σ'v0 (kPa)", min_value=0.0, value=75.0, step=1.0)
+
+# Unit selectors:
+csv_unit = st.selectbox("Unit of stress in your CSV (first column)", UNITS, index=UNITS.index("kPa"))
+sv_unit = st.selectbox("Unit for in-situ effective stress sigma'v0 input", UNITS, index=UNITS.index("kPa"))
+display_unit = st.selectbox("Display results in", UNITS, index=UNITS.index("kPa"))
+
+sigmaV_input = st.number_input(f"In-situ effective vertical stress sigma'v0 ({sv_unit})", min_value=0.0, value=75.0, step=1.0)
 
 method_name = st.selectbox(
     "Method",
@@ -44,22 +108,22 @@ method_name = st.selectbox(
         "Becker et al. (energy)",
     ],
 )
-unit = st.selectbox("Display units", ["kPa", "tsf", "psf"])
 
-def kpa_to_display(x):
-    if unit == "kPa":
-        return x
-    if unit == "psf":
-        return x * 20.885434233  # 1 kPa = 20.885434233 psf
-    if unit == "tsf":
-        return x / 95.760518     # 1 tsf ≈ 95.760518 kPa
-    return x
-
+# ----------------- Main workflow -----------------
 def run_analysis(df):
-    data = Data(df.iloc[:, :3], sigmaV=sigmaV)
+    # Convert stress column to kPa using chosen CSV unit
+    dfk = df.copy()
+    dfk.iloc[:, 0] = series_to_kpa(dfk.iloc[:, 0], csv_unit)
+
+    # Convert in-situ input to kPa
+    sigmaV_kpa = to_kpa(sigmaV_input, sv_unit)
+
+    # Build data object (strain and void ratio columns untouched)
+    data = Data(dfk.iloc[:, :3], sigmaV=sigmaV_kpa)
 
     # Show the raw curve first
     fig_curve = data.plot()
+    fix_legend_tex(fig_curve)
     st.pyplot(fig_curve)
 
     # Choose and run the method
@@ -88,8 +152,21 @@ def run_analysis(df):
         model = BeckerEtAl(data)
         fig = model.getSigmaP()
 
+    fix_legend_tex(fig)
     st.subheader("Result")
     st.pyplot(fig)
+
+    # Try to display a numeric sigma'p if present on the model
+    sigma_p_val = None
+    for name in ("sigmaP", "sigma_p", "sigmap", "SigmaP"):
+        if hasattr(model, name):
+            try:
+                sigma_p_val = float(getattr(model, name))
+                break
+            except Exception:
+                pass
+    if sigma_p_val is not None:
+        st.metric(f"Estimated sigma'p ({display_unit})", f"{from_kpa(sigma_p_val, display_unit):.3g}")
 
     # Download figure as PNG
     buf = io.BytesIO()
@@ -100,10 +177,10 @@ if uploaded is not None:
     try:
         df = pd.read_csv(uploaded)
         if df.shape[1] < 3:
-            st.error("Need at least 3 columns: σ'v, axial strain, void ratio.")
+            st.error("Need at least 3 columns: stress, axial strain, void ratio.")
         else:
             run_analysis(df)
     except Exception as e:
         st.exception(e)
 else:
-    st.info("Upload a CSV to begin, or copy the demo URL above into your browser and download the file.")
+    st.info("Upload a CSV to begin. If using the demo file, set CSV unit to kPa.")
