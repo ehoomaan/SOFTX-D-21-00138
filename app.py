@@ -3,8 +3,9 @@ import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
 import matplotlib as mpl
+from matplotlib.ticker import FuncFormatter
 
-# --- Matplotlib rendering defaults: no external LaTeX, use mathtext ---
+# --- Matplotlib: disable external LaTeX ---
 mpl.rcParams["text.usetex"] = False
 mpl.rcParams["mathtext.fontset"] = "dejavusans"
 mpl.rcParams["font.family"] = "DejaVu Sans"
@@ -85,6 +86,56 @@ def fix_legend_tex(fig):
                 t.set_text(clean)
                 t.set_fontweight('bold')
 
+# --- Apply display units (tick labels + axis label + legend kPa->unit) ---
+def apply_display_units(fig, unit):
+    if unit == "kPa":
+        return  # default already kPa
+    factor = 1.0 / TO_KPA[unit]  # multiply kPa by factor to get target unit
+
+    def fmt(val, pos=None):
+        y = val * factor  # convert tick (in kPa) to target unit
+        # compact formatting across log/linear
+        if y == 0:
+            return "0"
+        # Use g-format; keep a couple of significant figs
+        return f"{y:.6g}"
+
+    for ax in fig.get_axes():
+        # Ticks
+        ax.xaxis.set_major_formatter(FuncFormatter(fmt))
+        ax.xaxis.set_minor_formatter(FuncFormatter(lambda v, p: ""))  # keep minors uncluttered
+
+        # X label
+        xlabel = ax.get_xlabel() or ""
+        if "kPa" in xlabel:
+            ax.set_xlabel(xlabel.replace("kPa", unit))
+        elif xlabel.strip() != "":
+            ax.set_xlabel(f"{xlabel} [{unit}]")
+        else:
+            ax.set_xlabel(f"Effective vertical stress, sigma'v [{unit}]")
+
+        # Legend text: convert "... = <num> kPa" to the chosen unit
+        leg = ax.get_legend()
+        if leg:
+            def repl(m):
+                val = float(m.group(1))
+                y = val * factor
+                # choose a sensible format
+                if y >= 100:
+                    s = f"{y:.0f}"
+                elif y >= 10:
+                    s = f"{y:.1f}"
+                else:
+                    s = f"{y:.3g}"
+                return f"{s} {unit}"
+
+            for txt in leg.get_texts():
+                s = txt.get_text()
+                s2 = re.sub(r"([0-9]*\.?[0-9]+)\s*kPa", repl, s)
+                s2 = s2.replace("[kPa]", f"[{unit}]")  # just in case
+                if s2 != s:
+                    txt.set_text(s2)
+
 # ----------------- UI controls -----------------
 uploaded = st.file_uploader("Upload CSV", type=["csv"])
 
@@ -124,6 +175,7 @@ def run_analysis(df):
     # Show the raw curve first
     fig_curve = data.plot()
     fix_legend_tex(fig_curve)
+    apply_display_units(fig_curve, display_unit)
     st.pyplot(fig_curve)
 
     # Choose and run the method
@@ -153,10 +205,12 @@ def run_analysis(df):
         fig = model.getSigmaP()
 
     fix_legend_tex(fig)
+    apply_display_units(fig, display_unit)
+
     st.subheader("Result")
     st.pyplot(fig)
 
-    # Try to display a numeric sigma'p if present on the model
+    # Show numeric sigma'p if present
     sigma_p_val = None
     for name in ("sigmaP", "sigma_p", "sigmap", "SigmaP"):
         if hasattr(model, name):
