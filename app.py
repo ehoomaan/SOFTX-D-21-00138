@@ -3,6 +3,39 @@ import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
 import matplotlib as mpl
+# --- put this near the top of app.py ---
+import re
+import matplotlib as mpl
+
+def _strip_tex_macros(s: str) -> str:
+    # Remove \textbf{...} and \mathbf{...} while keeping the content
+    s = re.sub(r'\\textbf\{([^}]*)\}', r'\1', s)
+    s = re.sub(r'\\mathbf\{([^}]*)\}', r'\1', s)
+    # Optional: clean a few harmless TeX tokens if they ever appear
+    s = s.replace(r'\,', ' ').replace(r'\;', ' ').replace(r'\:', ' ')
+    return s
+
+def fix_legend_tex(fig):
+    # Go through every axes and sanitize legend text/title
+    for ax in fig.get_axes():
+        leg = ax.get_legend()
+        if not leg:
+            continue
+        # Title
+        title = leg.get_title()
+        if title is not None:
+            raw = title.get_text()
+            clean = _strip_tex_macros(raw)
+            if clean != raw:
+                title.set_text(clean)
+                title.set_fontweight('bold')
+        # Entries
+        for t in leg.get_texts():
+            raw = t.get_text()
+            clean = _strip_tex_macros(raw)
+            if clean != raw:
+                t.set_text(clean)
+                t.set_fontweight('bold')
 
 # IMPORTANT: Disable LaTeX so it works on Streamlit Cloud (no TeX installed there)
 mpl.rcParams["text.usetex"] = False
